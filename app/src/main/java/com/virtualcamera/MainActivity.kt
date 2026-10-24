@@ -2,7 +2,6 @@ package com.virtualcamera
 
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.Uri
 import android.os.Build
@@ -126,11 +125,10 @@ class MainActivity : AppCompatActivity() {
         })
 
         root.addView(makeButton("START SERVICE") {
-            statusText.text =
-                "Photo preview is available. Camera feed integration is separate."
+            statusText.text = "Photo preview is ready. Camera feed is not connected."
             Toast.makeText(
                 this,
-                "This button does not start a camera feed yet.",
+                "Camera feed integration is not implemented yet.",
                 Toast.LENGTH_LONG
             ).show()
         })
@@ -138,6 +136,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(makeButton("STOP PREVIEW") {
             photoPreview.setImageDrawable(null)
             photoPreview.visibility = ImageView.GONE
+            selectedPhotoUri = null
             statusText.text = "Preview cleared"
         })
 
@@ -145,8 +144,65 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showAppPicker() {
-        val intent = Intent(this, TargetAppPickerActivity::class.java)
-        appPicker.launch(intent)
+        val pm = packageManager
+
+        val apps = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            pm.getInstalledApplications(
+                android.content.pm.PackageManager.ApplicationInfoFlags.of(0)
+            )
+        } else {
+            @Suppress("DEPRECATION")
+            pm.getInstalledApplications(0)
+        }
+
+        val launchableApps = apps.mapNotNull { appInfo ->
+            val launchIntent = pm.getLaunchIntentForPackage(appInfo.packageName)
+                ?: return@mapNotNull null
+
+            Triple(
+                pm.getApplicationLabel(appInfo).toString(),
+                appInfo.packageName,
+                launchIntent
+            )
+        }.sortedBy { it.first.lowercase() }
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 12, 24, 12)
+        }
+
+        val scroll = ScrollView(this)
+        scroll.addView(container)
+
+        val dialog = android.app.AlertDialog.Builder(this)
+            .setTitle("Select Target App")
+            .setView(scroll)
+            .setNegativeButton("Cancel", null)
+            .create()
+
+        if (launchableApps.isEmpty()) {
+            container.addView(TextView(this).apply {
+                text = "No launchable apps found"
+                textSize = 16f
+                setPadding(12, 20, 12, 20)
+            })
+        } else {
+            launchableApps.forEach { (appName, packageName, _) ->
+                val button = Button(this).apply {
+                    text = "$appName\n$packageName"
+                    isAllCaps = false
+                    setOnClickListener {
+                        selectedAppPackage = packageName
+                        selectedAppText.text = "Selected app: $appName"
+                        statusText.text = "Target app selected"
+                        dialog.dismiss()
+                    }
+                }
+                container.addView(button)
+            }
+        }
+
+        dialog.show()
     }
 
     private fun openSelectedApp() {
@@ -157,8 +213,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val launchIntent = packageManager
-            .getLaunchIntentForPackage(packageName)
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
 
         if (launchIntent != null) {
             startActivity(launchIntent)
