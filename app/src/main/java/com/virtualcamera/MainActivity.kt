@@ -1,36 +1,55 @@
 package com.virtualcamera
 
+import android.app.Activity
 import android.content.Intent
-import android.net.Uri
+import android.content.pm.PackageManager
 import android.graphics.Color
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.VideoView
-import android.widget.MediaController
-import android.widget.FrameLayout
-import android.widget.ProgressBar
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var videoView: VideoView
     private lateinit var statusText: TextView
-    private lateinit var loopButton: Button
-    private lateinit var progress: ProgressBar
+    private lateinit var selectedAppText: TextView
+    private lateinit var photoPreview: ImageView
 
-    private var selectedVideo: Uri? = null
-    private var looping = true
-    private var prepared = false
+    private var selectedAppPackage: String? = null
+    private var selectedPhotoUri: Uri? = null
 
-    private val videoPicker =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri != null) loadVideo(uri)
+    private val photoPicker =
+        registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+            if (uri != null) {
+                selectedPhotoUri = uri
+                photoPreview.setImageURI(uri)
+                photoPreview.visibility = ImageView.VISIBLE
+                statusText.text = "Photo selected successfully"
+            }
+        }
+
+    private val appPicker =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                val data = result.data
+                val packageName = data?.getStringExtra("selected_package")
+                val appName = data?.getStringExtra("selected_app_name")
+
+                if (packageName != null) {
+                    selectedAppPackage = packageName
+                    selectedAppText.text = "Selected app: ${appName ?: packageName}"
+                    statusText.text = "Target app selected"
+                }
+            }
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,166 +61,127 @@ class MainActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(20, 20, 20, 16)
+            setPadding(20, 20, 20, 20)
             setBackgroundColor(Color.rgb(15, 23, 42))
         }
 
+        val scrollView = ScrollView(this)
+        scrollView.addView(root)
+
         val title = TextView(this).apply {
             text = "ABSOLUTE VIRTUAL CAMERA"
-            textSize = 21f
+            textSize = 22f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            setPadding(0, 8, 0, 10)
+            setPadding(0, 12, 0, 20)
         }
 
         statusText = TextView(this).apply {
-            text = "Select a video to begin"
-            textSize = 14f
+            text = "Select an app and a photo"
+            textSize = 15f
             gravity = Gravity.CENTER
             setTextColor(Color.LTGRAY)
-            setPadding(0, 6, 0, 10)
+            setPadding(0, 8, 0, 12)
         }
 
-        videoView = VideoView(this).apply {
+        selectedAppText = TextView(this).apply {
+            text = "No app selected"
+            textSize = 14f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setPadding(0, 8, 0, 12)
+        }
+
+        photoPreview = ImageView(this).apply {
+            visibility = ImageView.GONE
+            scaleType = ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(Color.BLACK)
-            setMediaController(MediaController(this@MainActivity))
-        }
-
-        progress = ProgressBar(this).apply {
-            visibility = android.view.View.GONE
-        }
-
-        val previewFrame = FrameLayout(this).apply {
-            setBackgroundColor(Color.BLACK)
-            addView(
-                videoView,
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.MATCH_PARENT
-                )
-            )
-            addView(
-                progress,
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                    Gravity.CENTER
-                )
-            )
+            adjustViewBounds = true
         }
 
         root.addView(title)
         root.addView(statusText)
+        root.addView(selectedAppText)
+
+        root.addView(makeButton("SELECT APP") {
+            showAppPicker()
+        })
+
+        root.addView(makeButton("SELECT PHOTO") {
+            photoPicker.launch("image/*")
+        })
+
         root.addView(
-            previewFrame,
+            photoPreview,
             LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
-            ).apply { setMargins(0, 6, 0, 10) }
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                300
+            ).apply {
+                setMargins(0, 12, 0, 12)
+            }
         )
 
-        root.addView(makeButton("SELECT VIDEO") {
-            videoPicker.launch(arrayOf("video/*"))
-        })
-
-        loopButton = makeButton("LOOP: ON") {
-            looping = !looping
-            loopButton.text = if (looping) "LOOP: ON" else "LOOP: OFF"
-            if (prepared) {
-                statusText.text =
-                    if (looping) "Loop enabled" else "Loop disabled"
-                // Apply the new setting without reloading the video.
-                videoView.setOnCompletionListener {
-                    if (looping) {
-                        videoView.seekTo(0)
-                        videoView.start()
-                    }
-                }
-            }
-        }
-        root.addView(loopButton)
-
-        root.addView(makeButton("PLAY / RESUME") {
-            if (selectedVideo == null) {
-                statusText.text = "Select a video first"
-            } else if (prepared) {
-                videoView.start()
-                statusText.text = "Playing preview"
-            } else {
-                selectedVideo?.let { loadVideo(it) }
-            }
-        })
-
-        root.addView(makeButton("STOP PREVIEW") {
-            videoView.pause()
-            statusText.text = "Preview paused"
+        root.addView(makeButton("OPEN APP") {
+            openSelectedApp()
         })
 
         root.addView(makeButton("START SERVICE") {
             statusText.text =
-                "Preview only: virtual camera feed is not implemented yet."
+                "Photo preview is available. Camera feed integration is separate."
             Toast.makeText(
                 this,
-                "Camera feed integration is a separate step",
+                "This button does not start a camera feed yet.",
                 Toast.LENGTH_LONG
             ).show()
         })
 
-        setContentView(root)
+        root.addView(makeButton("STOP PREVIEW") {
+            photoPreview.setImageDrawable(null)
+            photoPreview.visibility = ImageView.GONE
+            statusText.text = "Preview cleared"
+        })
+
+        setContentView(scrollView)
     }
 
-    private fun loadVideo(uri: Uri) {
-        selectedVideo = uri
-        prepared = false
-        progress.visibility = android.view.View.VISIBLE
-        statusText.text = "Loading video..."
-
-        try {
-            contentResolver.takePersistableUriPermission(
-                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
-            )
-        } catch (_: Exception) {}
-
-        videoView.setOnPreparedListener { player ->
-            progress.visibility = android.view.View.GONE
-            player.isLooping = looping
-            prepared = true
-            videoView.start()
-            statusText.text = "Video ready"
-        }
-
-        videoView.setOnErrorListener { _, what, extra ->
-            progress.visibility = android.view.View.GONE
-            prepared = false
-            statusText.text = "Playback error: $what / $extra"
-            true
-        }
-
-        videoView.setOnCompletionListener {
-            if (looping) {
-                videoView.seekTo(0)
-                videoView.start()
-            } else {
-                statusText.text = "Video finished"
-            }
-        }
-
-        videoView.setVideoURI(uri)
+    private fun showAppPicker() {
+        val intent = Intent(this, TargetAppPickerActivity::class.java)
+        appPicker.launch(intent)
     }
 
-    private fun makeButton(label: String, action: () -> Unit): Button {
+    private fun openSelectedApp() {
+        val packageName = selectedAppPackage
+
+        if (packageName == null) {
+            statusText.text = "Please select an app first"
+            return
+        }
+
+        val launchIntent = packageManager
+            .getLaunchIntentForPackage(packageName)
+
+        if (launchIntent != null) {
+            startActivity(launchIntent)
+        } else {
+            statusText.text = "Unable to open selected app"
+        }
+    }
+
+    private fun makeButton(
+        label: String,
+        action: () -> Unit
+    ): Button {
         return Button(this).apply {
             text = label
             isAllCaps = false
             setOnClickListener { action() }
+
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, 2, 0, 2) }
+            ).apply {
+                setMargins(0, 5, 0, 5)
+            }
         }
-    }
-
-    override fun onDestroy() {
-        if (::videoView.isInitialized) videoView.stopPlayback()
-        super.onDestroy()
     }
 }
