@@ -1,9 +1,11 @@
 package com.virtualcamera
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.net.Uri
+import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
 import android.view.Gravity
@@ -51,6 +53,35 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+    private val projectionLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK && result.data != null) {
+                val serviceIntent = Intent(this, VirtualCameraService::class.java).apply {
+                    action = VirtualCameraService.ACTION_START
+                    putExtra(VirtualCameraService.EXTRA_RESULT_CODE, result.resultCode)
+                    putExtra(VirtualCameraService.EXTRA_PROJECTION_DATA, result.data)
+                    putExtra(
+                        VirtualCameraService.EXTRA_VIDEO_URI,
+                        selectedPhotoUri?.toString()
+                    )
+                }
+
+                try {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent)
+                    } else {
+                        startService(serviceIntent)
+                    }
+                    statusText.text =
+                        "Service start requested. Camera feed output is not yet connected."
+                } catch (e: Exception) {
+                    statusText.text = "Unable to start service: ${e.message}"
+                }
+            } else {
+                statusText.text = "Screen capture permission was not granted"
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -60,7 +91,7 @@ class MainActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(20, 20, 20, 20)
+            setPadding(16, 12, 16, 16)
             setBackgroundColor(Color.rgb(15, 23, 42))
         }
 
@@ -69,10 +100,10 @@ class MainActivity : AppCompatActivity() {
 
         val title = TextView(this).apply {
             text = "ABSOLUTE VIRTUAL CAMERA"
-            textSize = 22f
+            textSize = 21f
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
-            setPadding(0, 12, 0, 20)
+            setPadding(0, 12, 0, 16)
         }
 
         statusText = TextView(this).apply {
@@ -114,7 +145,7 @@ class MainActivity : AppCompatActivity() {
             photoPreview,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                300
+                380
             ).apply {
                 setMargins(0, 12, 0, 12)
             }
@@ -125,12 +156,15 @@ class MainActivity : AppCompatActivity() {
         })
 
         root.addView(makeButton("START SERVICE") {
-            statusText.text = "Photo preview is ready. Camera feed is not connected."
-            Toast.makeText(
-                this,
-                "Camera feed integration is not implemented yet.",
-                Toast.LENGTH_LONG
-            ).show()
+            requestProjectionPermission()
+        })
+
+        root.addView(makeButton("STOP SERVICE") {
+            val stopIntent = Intent(this, VirtualCameraService::class.java).apply {
+                action = VirtualCameraService.ACTION_STOP
+            }
+            startService(stopIntent)
+            statusText.text = "Stop requested"
         })
 
         root.addView(makeButton("STOP PREVIEW") {
@@ -143,66 +177,15 @@ class MainActivity : AppCompatActivity() {
         setContentView(scrollView)
     }
 
+    private fun requestProjectionPermission() {
+        val manager =
+            getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        projectionLauncher.launch(manager.createScreenCaptureIntent())
+    }
+
     private fun showAppPicker() {
-        val pm = packageManager
-
-        val apps = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            pm.getInstalledApplications(
-                android.content.pm.PackageManager.ApplicationInfoFlags.of(0)
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            pm.getInstalledApplications(0)
-        }
-
-        val launchableApps = apps.mapNotNull { appInfo ->
-            val launchIntent = pm.getLaunchIntentForPackage(appInfo.packageName)
-                ?: return@mapNotNull null
-
-            Triple(
-                pm.getApplicationLabel(appInfo).toString(),
-                appInfo.packageName,
-                launchIntent
-            )
-        }.sortedBy { it.first.lowercase() }
-
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 12, 24, 12)
-        }
-
-        val scroll = ScrollView(this)
-        scroll.addView(container)
-
-        val dialog = android.app.AlertDialog.Builder(this)
-            .setTitle("Select Target App")
-            .setView(scroll)
-            .setNegativeButton("Cancel", null)
-            .create()
-
-        if (launchableApps.isEmpty()) {
-            container.addView(TextView(this).apply {
-                text = "No launchable apps found"
-                textSize = 16f
-                setPadding(12, 20, 12, 20)
-            })
-        } else {
-            launchableApps.forEach { (appName, packageName, _) ->
-                val button = Button(this).apply {
-                    text = "$appName\n$packageName"
-                    isAllCaps = false
-                    setOnClickListener {
-                        selectedAppPackage = packageName
-                        selectedAppText.text = "Selected app: $appName"
-                        statusText.text = "Target app selected"
-                        dialog.dismiss()
-                    }
-                }
-                container.addView(button)
-            }
-        }
-
-        dialog.show()
+        val intent = Intent(this, TargetAppPickerActivity::class.java)
+        appPicker.launch(intent)
     }
 
     private fun openSelectedApp() {
@@ -222,10 +205,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun makeButton(
-        label: String,
-        action: () -> Unit
-    ): Button {
+    private fun makeButton(label: String, action: () -> Unit): Button {
         return Button(this).apply {
             text = label
             isAllCaps = false
