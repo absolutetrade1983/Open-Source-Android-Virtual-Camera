@@ -1,85 +1,156 @@
 package com.virtualcamera
 
-import android.Manifest
-import android.content.ComponentName
 import android.content.Intent
-import android.content.ServiceConnection
-import android.content.pm.PackageManager
-import android.media.projection.MediaProjectionManager
-import android.os.Build
+import android.net.Uri
+import android.graphics.Color
 import android.os.Bundle
-import android.widget.Toast
+import android.view.Gravity
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.LinearLayout
+import android.widget.TextView
+import android.widget.VideoView
+import android.widget.MediaController
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
-import kotlinx.coroutines.*
 
 class MainActivity : AppCompatActivity() {
 
+    private lateinit var videoView: VideoView
+    private lateinit var statusText: TextView
+    private lateinit var loopButton: Button
+
+    private var selectedVideo: Uri? = null
+    private var looping = true
+    private var prepared = false
+
+    private val videoPicker =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                selectedVideo = uri
+                prepared = false
+
+                try {
+                    contentResolver.takePersistableUriPermission(
+                        uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                } catch (_: Exception) {}
+
+                statusText.text = "Loading video..."
+
+                videoView.setVideoURI(uri)
+                videoView.setOnPreparedListener { player ->
+                    player.isLooping = looping
+                    prepared = true
+                    videoView.start()
+                    statusText.text = "Video ready"
+                }
+                videoView.setOnErrorListener { _, _, _ ->
+                    statusText.text = "Unable to play this video"
+                    true
+                }
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        if (!checkPermissions()) {
-            requestRuntimePermissions()
+
+        window.statusBarColor = Color.rgb(15, 23, 42)
+        window.navigationBarColor = Color.rgb(15, 23, 42)
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(20, 24, 20, 20)
+            setBackgroundColor(Color.rgb(15, 23, 42))
         }
-        
-        val serviceIntent = Intent(this, VirtualCameraService::class.java)
-        startService(serviceIntent)
-    }
-    
-    private val projectionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK && result.data != null) {
-            val serviceIntent = Intent(this, VirtualCameraService::class.java).apply {
-                action = VirtualCameraService.ACTION_START
-                putExtra(VirtualCameraService.EXTRA_RESULT_CODE, result.resultCode)
-                putExtra(VirtualCameraService.EXTRA_PROJECTION_DATA, result.data)
+
+        val title = TextView(this).apply {
+            text = "ABSOLUTE VIRTUAL CAMERA"
+            textSize = 22f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            setPadding(0, 8, 0, 12)
+        }
+
+        statusText = TextView(this).apply {
+            text = "Select a video to begin"
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setTextColor(Color.LTGRAY)
+            setPadding(0, 8, 0, 12)
+        }
+
+        videoView = VideoView(this).apply {
+            setBackgroundColor(Color.BLACK)
+            setMediaController(MediaController(this@MainActivity))
+        }
+
+        root.addView(title)
+        root.addView(statusText)
+
+        root.addView(
+            videoView,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
+            ).apply {
+                setMargins(0, 8, 0, 12)
             }
-            startService(serviceIntent)
-            Toast.makeText(this, "Virtual camera started", Toast.LENGTH_SHORT).show()
-        } else {
-            Toast.makeText(this, "Projection permission denied", Toast.LENGTH_SHORT).show()
+        )
+
+        root.addView(makeButton("SELECT VIDEO") {
+            videoPicker.launch(arrayOf("video/*"))
+        })
+
+        loopButton = makeButton("LOOP: ON") {
+            looping = !looping
+            loopButton.text = if (looping) "LOOP: ON" else "LOOP: OFF"
+            if (prepared) {
+                val position = videoView.currentPosition
+                videoView.setVideoURI(selectedVideo)
+                videoView.setOnPreparedListener { player ->
+                    player.isLooping = looping
+                    player.seekTo(position)
+                    videoView.start()
+                    prepared = true
+                }
+            }
+        }
+        root.addView(loopButton)
+
+        root.addView(makeButton("START SERVICE") {
+            statusText.text =
+                if (selectedVideo == null) {
+                    "Select a video first. Camera feed is not yet implemented."
+                } else {
+                    "Video preview is ready. Service integration still needs fixing."
+                }
+        })
+
+        root.addView(makeButton("STOP PREVIEW") {
+            videoView.pause()
+            statusText.text = "Preview paused"
+        })
+
+        setContentView(root)
+    }
+
+    private fun makeButton(label: String, action: () -> Unit): Button {
+        return Button(this).apply {
+            text = label
+            isAllCaps = false
+            setOnClickListener { action() }
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                setMargins(0, 3, 0, 3)
+            }
         }
     }
-    
-    private fun startVirtualCamera() {
-        val mgr = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        projectionLauncher.launch(mgr.createScreenCaptureIntent())
-    }
-    
-    private fun stopVirtualCamera() {
-        val intent = Intent(this, VirtualCameraService::class.java).apply {
-            action = VirtualCameraService.ACTION_STOP
-        }
-        startService(intent)
-        Toast.makeText(this, "Virtual camera stopped", Toast.LENGTH_SHORT).show()
-    }
-    
-    private fun checkPermissions(): Boolean {
-        val camera = ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-        val notif = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-        } else true
-        val storage = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_MEDIA_VIDEO) == PackageManager.PERMISSION_GRANTED
-        } else true
-        return camera && notif && storage
-    }
-    
-    private fun requestRuntimePermissions() {
-        val perms = mutableListOf(Manifest.permission.CAMERA)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            perms += Manifest.permission.POST_NOTIFICATIONS
-            perms += Manifest.permission.READ_MEDIA_VIDEO
-        }
-        requestPermissions(perms.toTypedArray(), 1001)
-    }
-    
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1001 && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-            startVirtualCamera()
-        }
+
+    override fun onDestroy() {
+        if (::videoView.isInitialized) videoView.stopPlayback()
+        super.onDestroy()
     }
 }
